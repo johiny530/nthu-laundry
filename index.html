@@ -226,7 +226,8 @@ function render() {
     const st = STATUS[code] || ["未知", "dead"];
     const t = tally[kind];
 
-    if (code === 0 || code === 1) t.free++;
+    // 剛洗好／剛烘好的機台實體上是空的，只是衣服可能還在裡面，一併算成可用
+    if (isFinished(code)) t.free++;
     else if (code === 8 && (t.soon === null || left < t.soon)) t.soon = left;
 
     // 盯著的機台：完成時通知一次，然後自動取消
