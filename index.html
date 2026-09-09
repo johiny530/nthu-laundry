@@ -37,8 +37,14 @@
     vertical-align:-3px;margin-right:3px}
   #summary .sep{margin:0 8px;opacity:.45}
   #summary b.warm{color:var(--done)}
-  #keepopen{display:none;font-size:12px;color:var(--bell);margin:-12px 0 18px}
+  #keepopen{display:none;font-size:12px;color:var(--bell);margin:-12px 0 6px}
   #keepopen.show{display:block}
+  #tools{margin:-8px 0 16px;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  #tools button{font-size:12px;padding:4px 10px;border-radius:7px;cursor:pointer;
+    border:1px solid var(--line);background:var(--card);color:var(--muted)}
+  #tools button:hover{color:var(--text)}
+  #testmsg{font-size:12px;color:var(--muted)}
+  #testmsg.ok{color:var(--free)} #testmsg.bad{color:var(--err)}
   .head{display:flex;align-items:baseline;justify-content:space-between;margin:20px 0 8px;gap:10px}
   .head h2{font-size:13px;color:var(--muted);font-weight:600;margin:0;letter-spacing:.08em}
   .head .soon{font-size:13px;font-variant-numeric:tabular-nums;color:var(--muted)}
@@ -84,6 +90,7 @@
 </header>
 <p id="summary">—</p>
 <p id="keepopen">分頁要留著才會通知，可以最小化或切到背景。</p>
+<p id="tools"><button id="test">測試通知</button><span id="testmsg"></span></p>
 
 <div class="head"><h2>洗衣機</h2><span class="soon" id="soon-w"></span></div>
 <div class="grid" id="washers"></div>
@@ -136,9 +143,23 @@ function save() {
   } catch {}
 }
 
-function notify(body) {
-  if (!("Notification" in window) || Notification.permission !== "granted") return;
-  try { new Notification("碩齋洗衣房", { body, icon: "icon-180.png", tag: body }); } catch {}
+let swReg = null;
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").then((r) => { swReg = r; }).catch(() => {});
+}
+
+// Android Chrome 禁止 new Notification()（丟 Illegal constructor），必須走 Service Worker 的
+// showNotification()；桌面兩種都行。失敗時回傳原因而不是靜默吞掉，才有辦法診斷。
+async function notify(body) {
+  if (!("Notification" in window)) return "這個瀏覽器不支援通知";
+  if (Notification.permission !== "granted") return "沒有通知權限（目前是 " + Notification.permission + "）";
+  const opts = { body, icon: "icon-180.png", badge: "icon-180.png", tag: body, renotify: true };
+  try {
+    const reg = swReg || ("serviceWorker" in navigator ? await navigator.serviceWorker.ready : null);
+    if (reg) { await reg.showNotification("碩齋洗衣房", opts); return null; }
+  } catch (e) { /* 退回建構式 */ }
+  try { new Notification("碩齋洗衣房", opts); return null; }
+  catch (e) { return "發送失敗：" + e.name + " " + e.message; }
 }
 
 const BELL_SVG =
@@ -288,6 +309,18 @@ client.on("message", (topic, payload) => {
   if (prev && d.ts < prev.ts) return;               // 忽略較舊的亂序訊息
   state[mac] = { main: mainCode(d.status), timeLeft: d.timeLeft || 0, ts: d.ts };
   render();
+});
+
+// 測試按鈕：把「邏輯有沒有跑」和「系統有沒有顯示」分開，失敗時直接把原因寫在畫面上
+document.getElementById("test").addEventListener("click", async () => {
+  const msg = document.getElementById("testmsg");
+  msg.className = ""; msg.textContent = "送出中…";
+  if ("Notification" in window && Notification.permission === "default") {
+    await Notification.requestPermission();
+  }
+  const err = await notify("測試通知：看得到這則就表示通知正常");
+  if (err) { msg.className = "bad"; msg.textContent = "✕ " + err; }
+  else { msg.className = "ok"; msg.textContent = "✓ 已送出。沒跳出來就是被系統擋掉了（Windows 專注輔助、或 Chrome 的網站通知設定）"; }
 });
 
 setInterval(render, 1000);
