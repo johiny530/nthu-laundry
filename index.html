@@ -136,7 +136,13 @@ if ("serviceWorker" in navigator) {
 // Android Chrome 禁止 new Notification()（丟 Illegal constructor），必須走 Service Worker 的
 // showNotification()；桌面兩種都行。失敗時回傳原因而不是靜默吞掉，才有辦法診斷。
 async function notify(body) {
-  if (!("Notification" in window)) return "這個瀏覽器不支援通知";
+  if (!("Notification" in window)) {
+    // iOS 只在「已加到主畫面」的網頁 App 裡提供 Notification API，一般 Safari 分頁沒有。
+    // navigator.standalone 是 iOS Safari 專有屬性：分頁裡是 false、從主畫面開啟是 true
+    return navigator.standalone === false
+      ? "iPhone 要先把網站加到主畫面才能通知（分享 → 加入主畫面）"
+      : "這個瀏覽器不支援通知";
+  }
   if (Notification.permission !== "granted") return "沒有通知權限（目前是 " + Notification.permission + "）";
   const opts = { body, icon: "icon-180.png", badge: "icon-180.png", tag: body, renotify: true };
   try {
