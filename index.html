@@ -62,6 +62,8 @@
     opacity:.45;display:flex;line-height:0;border-radius:6px}
   .bell:hover{opacity:1}
   .bell.on{opacity:1;color:var(--bell)}
+  /* 已經完成或失聯的機台沒有「完成」可以等，鈴鐺變暗且不吃點擊 */
+  .bell.off{opacity:.12;pointer-events:none}
   .free{background:var(--freebg);border-color:transparent} .free .s{color:var(--free)}
   .done{background:var(--donebg);border-color:transparent} .done .s{color:var(--done)}
   .busy .s{color:var(--busy)}
@@ -103,6 +105,9 @@ const STATUS = {
   10:["開鎖中","busy"], 11:["暫停","busy"], 12:["剛洗好","done"], 128:["錯誤","err"],
 };
 const isFinished = (code) => code === 12 || code === 0 || code === 1;
+// 只有之後還會走到「完成」的機台才值得設鈴鐺。已完成、閒置沒有完成可以等；
+// 失聯的機台一旦回報就是閒置，會立刻觸發一則不該有的「洗好了」
+const canWatch = (code) => !isFinished(code) && code !== -1;
 
 const state = {};   // mac -> {main, timeLeft, ts}
 const els = {};
@@ -185,6 +190,9 @@ function displayRemaining(mac, s) {
 // --- 鈴鐺：單純的開關，按一下盯著、再按一下取消，完成時通知一次 ---
 async function toggleBell(mac) {
   if (watches[mac]) { delete watches[mac]; save(); render(); return; }
+  // CSS 的 pointer-events 已經擋住了，這裡再擋一次，避免鍵盤或程式呼叫繞過
+  const s = state[mac];
+  if (!s || !canWatch(s.main)) return;
   if (!("Notification" in window)) { toast("這個瀏覽器不支援通知", "bad"); return; }
   if (Notification.permission === "default") await Notification.requestPermission();
   if (Notification.permission !== "granted") {
@@ -234,7 +242,9 @@ function render() {
     el.querySelector(".s").textContent = code === 12 ? "剛" + verb(mac) + "好" : st[0];
     el.querySelector(".t").textContent =
       code === 8 ? (left > 0 ? "剩 " + mmss(left) : "即將完成") : "";
-    el.querySelector(".bell").classList.toggle("on", !!watches[mac]);
+    const bell = el.querySelector(".bell");
+    bell.classList.toggle("on", !!watches[mac]);
+    bell.classList.toggle("off", !canWatch(code));
   }
 
   // 各區塊：有閒置就報台數，否則報最快多久有一台
