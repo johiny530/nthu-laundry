@@ -56,26 +56,11 @@
     opacity:.45;display:flex;line-height:0;border-radius:6px}
   .bell:hover{opacity:1}
   .bell.on{opacity:1;color:var(--bell)}
-  .m .lead{position:absolute;right:11px;bottom:10px;font-size:11px;color:var(--bell);font-weight:700}
   .free{background:var(--freebg);border-color:transparent} .free .s{color:var(--free)}
   .done{background:var(--donebg);border-color:transparent} .done .s{color:var(--done)}
   .busy .s{color:var(--busy)}
   .dead{background:var(--deadbg)} .dead .s{color:var(--dead)}
   .err{background:var(--errbg)} .err .s{color:var(--err)}
-  /* 提前分鐘的輸入對話框 */
-  #ask{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;
-    align-items:center;justify-content:center;padding:20px;z-index:9}
-  #ask.show{display:flex}
-  #ask .box{background:var(--card);border-radius:14px;padding:18px;width:100%;max-width:300px;
-    box-shadow:0 12px 40px rgba(0,0,0,.35)}
-  #ask h3{margin:0 0 4px;font-size:16px}
-  #ask p{margin:0 0 14px;font-size:13px;color:var(--muted);line-height:1.6}
-  #ask input{width:100%;font-size:17px;padding:9px 11px;border-radius:9px;
-    border:1px solid var(--line);background:var(--bg);color:var(--text)}
-  #ask .btns{display:flex;gap:8px;margin-top:14px}
-  #ask button{flex:1;padding:9px;border-radius:9px;border:1px solid var(--line);
-    background:var(--bg);color:var(--text);font-size:14px;cursor:pointer}
-  #ask button.go{background:var(--bell);border-color:var(--bell);color:#fff;font-weight:700}
 </style>
 </head>
 <body>
@@ -90,13 +75,6 @@
 <div class="grid" id="washers"></div>
 <div class="head"><h2>烘衣機</h2><span class="soon" id="soon-d"></span></div>
 <div class="grid" id="dryers"></div>
-
-<div id="ask"><div class="box">
-  <h3 id="ask-title">提醒我</h3>
-  <p id="ask-text">洗好前幾分鐘先通知你一次？完成時會再通知一次。</p>
-  <input type="number" id="ask-min" min="0" max="120" step="1" inputmode="numeric">
-  <div class="btns"><button id="ask-no">取消</button><button class="go" id="ask-ok">設定</button></div>
-</div></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.10.1/mqtt.min.js"></script>
 <script>
@@ -121,9 +99,8 @@ const isFinished = (code) => code === 12 || code === 0 || code === 1;
 
 const state = {};   // mac -> {main, timeLeft, ts}
 const els = {};
-// 盯著的機台：mac -> {lead:提前分鐘, warned:是否已發過提前通知}
+// 盯著的機台：mac -> true。完成時通知一次就自動移除
 let watches = load("watches", {});
-let lastLead = load("lastLead", 5);
 // 剛開頁面的前幾秒收到的是 retained 舊狀態；此時的「已完成」屬於漏接，通知要註明
 let booting = true;
 
@@ -136,7 +113,6 @@ function load(key, fallback) {
 function save() {
   try {
     localStorage.setItem("watches", JSON.stringify(watches));
-    localStorage.setItem("lastLead", JSON.stringify(lastLead));
   } catch {}
 }
 
@@ -171,7 +147,7 @@ for (const [mac, label, kind] of MACHINES) {
   el.innerHTML =
     '<div class="top"><span class="n">' + label + '</span>' +
     '<button class="bell" title="完成前提醒我" aria-label="提醒我">' + BELL_SVG + '</button></div>' +
-    '<span class="s">—</span><span class="t"></span><span class="lead"></span>';
+    '<span class="s">—</span><span class="t"></span>';
   document.getElementById(kind === "w" ? "washers" : "dryers").append(el);
   el.querySelector(".bell").addEventListener("click", () => toggleBell(mac));
   els[mac] = el;
@@ -199,54 +175,24 @@ function displayRemaining(mac, s) {
   return Math.max(0, Math.floor(anchor[mac].endsAt - Date.now() / 1000));
 }
 
-// --- 鈴鐺 ---
-let asking = null;
-const ask = document.getElementById("ask");
-const askMin = document.getElementById("ask-min");
-
+// --- 鈴鐺：單純的開關，按一下盯著、再按一下取消，完成時通知一次 ---
 async function toggleBell(mac) {
   if (watches[mac]) { delete watches[mac]; save(); render(); return; }
-  if (!("Notification" in window)) { blocked("這個瀏覽器不支援通知。"); return; }
+  if (!("Notification" in window)) { bellMsg("這個瀏覽器不支援通知"); return; }
   if (Notification.permission === "default") await Notification.requestPermission();
   if (Notification.permission !== "granted") {
-    blocked("瀏覽器的通知權限被關掉了，要到網站設定裡重新開啟才能提醒你。");
+    bellMsg("通知權限被關掉了，要到瀏覽器的網站設定裡重新開啟");
     return;
   }
-  asking = mac;
-  const V = verb(mac);
-  document.getElementById("ask-title").textContent = NAME[mac] + " 提醒我";
-  document.getElementById("ask-text").textContent =
-    V + "好前幾分鐘先通知你一次？完成時會再通知一次。";
-  // blocked() 會把輸入框和確定鈕藏起來，正常開啟時要還原
-  askMin.style.display = "";
-  document.getElementById("ask-ok").style.display = "";
-  document.getElementById("ask-no").textContent = "取消";
-  askMin.value = lastLead;
-  ask.classList.add("show");
-  askMin.focus();
-  askMin.select();
+  watches[mac] = true;
+  save(); render();
 }
-function closeAsk() { ask.classList.remove("show"); asking = null; }
-function confirmAsk() {
-  if (!asking) return;
-  const n = Math.max(0, Math.min(120, Math.round(Number(askMin.value) || 0)));
-  lastLead = n;
-  watches[asking] = { lead: n, warned: false };
-  save(); closeAsk(); render();
+// 失敗訊息直接寫在測試按鈕旁邊，不另外開對話框
+function bellMsg(msg) {
+  const el = document.getElementById("testmsg");
+  el.className = "bad";
+  el.textContent = "✕ " + msg;
 }
-function blocked(msg) {
-  asking = null;
-  document.getElementById("ask-title").textContent = "沒辦法設定提醒";
-  document.getElementById("ask-text").textContent = msg;
-  askMin.style.display = "none";
-  document.getElementById("ask-ok").style.display = "none";
-  document.getElementById("ask-no").textContent = "知道了";
-  ask.classList.add("show");
-}
-document.getElementById("ask-no").addEventListener("click", closeAsk);
-document.getElementById("ask-ok").addEventListener("click", confirmAsk);
-ask.addEventListener("click", (e) => { if (e.target === ask) closeAsk(); });
-askMin.addEventListener("keydown", (e) => { if (e.key === "Enter") confirmAsk(); });
 
 function render() {
   const tally = { w: { free: 0, soon: null }, d: { free: 0, soon: null } };
@@ -264,16 +210,12 @@ function render() {
     if (code === 0 || code === 1) t.free++;
     else if (code === 8 && (t.soon === null || left < t.soon)) t.soon = left;
 
-    // 盯著的機台：提前一次、完成一次，完成後自動取消
+    // 盯著的機台：完成時通知一次，然後自動取消
     const w = watches[mac];
     if (w) {
-      const V = verb(mac);
       if (isFinished(code)) {
-        notify(label + " " + V + "好了" + (booting ? "（你不在時完成）" : ""));
+        notify(label + " " + verb(mac) + "好了" + (booting ? "（你不在時完成）" : ""));
         delete watches[mac]; save();
-      } else if (code === 8 && !w.warned && left <= w.lead * 60) {
-        if (w.lead > 0) notify(label + " 還有 " + Math.ceil(left / 60) + " 分鐘" + V + "好");
-        w.warned = true; save();
       }
     }
 
@@ -282,8 +224,6 @@ function render() {
     el.querySelector(".t").textContent =
       code === 8 ? (left > 0 ? "剩 " + mmss(left) : "即將完成") : "";
     el.querySelector(".bell").classList.toggle("on", !!watches[mac]);
-    el.querySelector(".lead").textContent =
-      watches[mac] && watches[mac].lead > 0 ? "提前 " + watches[mac].lead + " 分" : "";
   }
 
   document.getElementById("keepopen").classList
