@@ -32,14 +32,9 @@
   h1{font-size:19px;margin:0;letter-spacing:.02em}
   #conn{font-size:12px;color:var(--muted);white-space:nowrap}
   #conn.bad{color:var(--err)}
-  #summary{font-size:14px;color:var(--muted);margin:6px 0 20px}
-  #summary b{color:var(--free);font-size:28px;font-variant-numeric:tabular-nums;
-    vertical-align:-3px;margin-right:3px}
-  #summary .sep{margin:0 8px;opacity:.45}
-  #summary b.warm{color:var(--done)}
-  #keepopen{display:none;font-size:12px;color:var(--bell);margin:-12px 0 6px}
+  #keepopen{display:none;font-size:12px;color:var(--bell);margin:12px 0 0}
   #keepopen.show{display:block}
-  #tools{margin:-8px 0 16px;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  #tools{margin:12px 0 4px;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
   #tools button{font-size:12px;padding:4px 10px;border-radius:7px;cursor:pointer;
     border:1px solid var(--line);background:var(--card);color:var(--muted)}
   #tools button:hover{color:var(--text)}
@@ -88,7 +83,6 @@
   <h1>碩齋洗衣房</h1>
   <span id="conn">連線中…</span>
 </header>
-<p id="summary">—</p>
 <p id="keepopen">分頁要留著才會通知，可以最小化或切到背景。</p>
 <p id="tools"><button id="test">測試通知</button><span id="testmsg"></span></p>
 
@@ -113,6 +107,9 @@ const MACHINES = [
   ["94c96001b398","烘 3","d"], ["94c96001b3aa","烘 4","d"],
 ];
 const NAME = Object.fromEntries(MACHINES.map(([m, l]) => [m, l]));
+const KIND = Object.fromEntries(MACHINES.map(([m, l, k]) => [m, k]));
+// 洗衣機說「洗好」、烘衣機說「烘好」，狀態文字和通知都用同一個字
+const verb = (mac) => (KIND[mac] === "d" ? "烘" : "洗");
 
 // 主狀態碼 → 顯示文字與外觀，取自廠商頁面的狀態表
 const STATUS = {
@@ -216,7 +213,14 @@ async function toggleBell(mac) {
     return;
   }
   asking = mac;
+  const V = verb(mac);
   document.getElementById("ask-title").textContent = NAME[mac] + " 提醒我";
+  document.getElementById("ask-text").textContent =
+    V + "好前幾分鐘先通知你一次？完成時會再通知一次。";
+  // blocked() 會把輸入框和確定鈕藏起來，正常開啟時要還原
+  askMin.style.display = "";
+  document.getElementById("ask-ok").style.display = "";
+  document.getElementById("ask-no").textContent = "取消";
   askMin.value = lastLead;
   ask.classList.add("show");
   askMin.focus();
@@ -245,7 +249,7 @@ ask.addEventListener("click", (e) => { if (e.target === ask) closeAsk(); });
 askMin.addEventListener("keydown", (e) => { if (e.key === "Enter") confirmAsk(); });
 
 function render() {
-  const tally = { w: { free: 0, done: 0, soon: null }, d: { free: 0, done: 0, soon: null } };
+  const tally = { w: { free: 0, soon: null }, d: { free: 0, soon: null } };
 
   for (const [mac, label, kind] of MACHINES) {
     const s = state[mac], el = els[mac];
@@ -258,23 +262,23 @@ function render() {
     const t = tally[kind];
 
     if (code === 0 || code === 1) t.free++;
-    else if (code === 12) t.done++;
     else if (code === 8 && (t.soon === null || left < t.soon)) t.soon = left;
 
     // 盯著的機台：提前一次、完成一次，完成後自動取消
     const w = watches[mac];
     if (w) {
+      const V = verb(mac);
       if (isFinished(code)) {
-        notify(booting ? label + " 洗好了（你不在時完成）" : label + " 洗好了");
+        notify(label + " " + V + "好了" + (booting ? "（你不在時完成）" : ""));
         delete watches[mac]; save();
       } else if (code === 8 && !w.warned && left <= w.lead * 60) {
-        if (w.lead > 0) notify(label + " 還有 " + Math.ceil(left / 60) + " 分鐘洗好");
+        if (w.lead > 0) notify(label + " 還有 " + Math.ceil(left / 60) + " 分鐘" + V + "好");
         w.warned = true; save();
       }
     }
 
     el.className = "m " + st[1];
-    el.querySelector(".s").textContent = st[0];
+    el.querySelector(".s").textContent = code === 12 ? "剛" + verb(mac) + "好" : st[0];
     el.querySelector(".t").textContent =
       code === 8 ? (left > 0 ? "剩 " + mmss(left) : "即將完成") : "";
     el.querySelector(".bell").classList.toggle("on", !!watches[mac]);
@@ -282,11 +286,6 @@ function render() {
       watches[mac] && watches[mac].lead > 0 ? "提前 " + watches[mac].lead + " 分" : "";
   }
 
-  const free = tally.w.free + tally.d.free;
-  const done = tally.w.done + tally.d.done;
-  document.getElementById("summary").innerHTML =
-    "<b>" + free + "</b> 台閒置" +
-    (done ? '<span class="sep">·</span><b class="warm">' + done + "</b> 台剛洗好" : "");
   document.getElementById("keepopen").classList
     .toggle("show", Object.keys(watches).length > 0);
 
