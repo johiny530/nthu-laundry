@@ -36,7 +36,7 @@
   #summary b{color:var(--free);font-size:28px;font-variant-numeric:tabular-nums;
     vertical-align:-3px;margin-right:3px}
   #summary .sep{margin:0 8px;opacity:.45}
-  #summary .warm{color:var(--done);font-weight:700}
+  #summary b.warm{color:var(--done)}
   .head{display:flex;align-items:baseline;justify-content:space-between;
     margin:20px 0 8px;gap:10px}
   .head h2{font-size:13px;color:var(--muted);font-weight:600;margin:0;letter-spacing:.08em}
@@ -54,7 +54,6 @@
   .busy .s{color:var(--busy)}
   .dead{background:var(--deadbg)} .dead .s{color:var(--dead)}
   .err{background:var(--errbg)} .err .s{color:var(--err)}
-  footer{margin-top:26px;font-size:11px;color:var(--muted);line-height:1.7}
 </style>
 </head>
 <body>
@@ -69,10 +68,6 @@
 <div class="head"><h2>烘衣機</h2><span class="soon" id="soon-d"></span></div>
 <div class="grid" id="dryers"></div>
 
-<footer>
-  資料來自機台心跳，約每 4 秒更新一次，不用重新整理。<br>
-  「閒置」= 可直接使用；「剛洗好」= 已完成，衣服可能還在裡面。
-</footer>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.10.1/mqtt.min.js"></script>
 <script>
@@ -135,7 +130,7 @@ function render() {
   const done = tally.w.done + tally.d.done;
   document.getElementById("summary").innerHTML =
     `<b>${free}</b> 台閒置` +
-    (done ? `<span class="sep">·</span><span class="warm">${done}</span> 台剛洗好` : "");
+    (done ? `<span class="sep">·</span><b class="warm">${done}</b> 台剛洗好` : "");
 
   // 各區塊：有閒置就報台數，否則報最快多久有一台
   for (const [kind, id] of [["w", "soon-w"], ["d", "soon-d"]]) {
