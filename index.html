@@ -184,24 +184,22 @@ for (const [mac, label, kind] of MACHINES) {
 const mainCode = (c) => (c < 0 ? c : (c >> 8) & 0xff);
 const mmss = (s) => Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
 
-function remaining(s) {
-  if (s.main !== 8) return s.timeLeft;              // 只有運轉中會繼續倒數
-  return Math.max(0, Math.floor(s.timeLeft - (Date.now() / 1000 - s.ts)));
-}
+// 機器的 timeLeft 以 4 秒為單位跳動，而心跳每 3 秒一次，所以每 12 秒會出現一則
+// 「數字沒變」的心跳。換算成完成時刻後位移呈 -1,-1,-1,+3 的鋸齒（實測平均 1.5 秒、
+// 最大 3 秒，不會累積漂移）。若讓外推值去追每一則心跳，畫面就會忽快忽停。
+// 作法：鎖定「預計完成時刻」，只有位移超過容差（暫停、換輪、真正的修正）才重新對時；
+// 平常一律用鎖定的時刻減現在，畫面就每秒穩定走一格。
+const ENDS_TOLERANCE = 10;
+const anchor = {};   // mac -> {main, endsAt}
 
-// 顯示用的剩餘秒數。心跳每 3 秒一次，中間靠外推補足才會平順，但外推值和新心跳互相
-// 拉扯會讓數字忽快忽退（烘1 曾持續回報 timeLeft=1，外推值就在 0 附近來回穿越）。
-// 同一輪運轉只允許往下走；狀態改變、或 timeLeft 明顯變大（代表換了新的一輪）才重設。
-const shown = {};
 function displayRemaining(mac, s) {
-  const raw = remaining(s);
-  const cur = shown[mac];
-  if (!cur || cur.main !== s.main || raw > cur.sec + 5) {
-    shown[mac] = { main: s.main, sec: raw };
-    return raw;
+  if (s.main !== 8) { delete anchor[mac]; return s.timeLeft || 0; }
+  const ends = s.ts + (s.timeLeft || 0);
+  const a = anchor[mac];
+  if (!a || a.main !== s.main || Math.abs(ends - a.endsAt) > ENDS_TOLERANCE) {
+    anchor[mac] = { main: s.main, endsAt: ends };
   }
-  if (raw < cur.sec) cur.sec = raw;
-  return cur.sec;
+  return Math.max(0, Math.floor(anchor[mac].endsAt - Date.now() / 1000));
 }
 
 // --- 鈴鐺 ---
@@ -340,7 +338,10 @@ document.getElementById("test").addEventListener("click", async () => {
   else { msg.className = "ok"; msg.textContent = "✓ 已送出。沒跳出來就是被系統擋掉了（Windows 專注輔助、或 Chrome 的網站通知設定）"; }
 });
 
-setInterval(render, 1000);
+// 每 250 毫秒重畫一次。倒數本身是「鎖定的完成時刻減現在」，秒數的整數邊界落在哪個
+// 瞬間由完成時刻的小數決定，跟畫面的節拍沒有鎖相；若一秒只畫一次，兩個約 1Hz 的
+// 過程會互相飄移，看起來就是偶爾停一拍、偶爾掉兩秒。畫得比邊界密就不會有這種混疊。
+setInterval(render, 250);
 render();
 </script>
 </body>
