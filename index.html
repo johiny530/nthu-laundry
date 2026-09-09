@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>碩齋洗衣房</title>
 <meta name="theme-color" content="#0f1115">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="apple-mobile-web-app-title" content="洗衣房">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <style>
   :root{
     --bg:#f6f7f9; --card:#fff; --text:#14161a; --muted:#6b7280; --line:#e5e7eb;
@@ -24,29 +28,33 @@
   body{margin:0;background:var(--bg);color:var(--text);
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC",sans-serif;
     padding:16px 14px calc(24px + env(safe-area-inset-bottom));max-width:640px;margin-inline:auto}
-  header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:4px}
+  header{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
   h1{font-size:19px;margin:0;letter-spacing:.02em}
   #conn{font-size:12px;color:var(--muted);white-space:nowrap}
   #conn.bad{color:var(--err)}
-  #summary{font-size:14px;color:var(--muted);margin:0 0 18px}
-  #summary b{color:var(--free);font-size:26px;font-variant-numeric:tabular-nums;
-    vertical-align:-2px;margin-right:2px}
-  h2{font-size:13px;color:var(--muted);font-weight:600;margin:20px 0 8px;
-    letter-spacing:.08em}
+  #summary{font-size:14px;color:var(--muted);margin:6px 0 20px}
+  #summary b{color:var(--free);font-size:28px;font-variant-numeric:tabular-nums;
+    vertical-align:-3px;margin-right:3px}
+  #summary .sep{margin:0 8px;opacity:.45}
+  #summary .warm{color:var(--done);font-weight:700}
+  .head{display:flex;align-items:baseline;justify-content:space-between;
+    margin:20px 0 8px;gap:10px}
+  .head h2{font-size:13px;color:var(--muted);font-weight:600;margin:0;letter-spacing:.08em}
+  .head .soon{font-size:13px;font-variant-numeric:tabular-nums;color:var(--muted)}
+  .head .soon.ok{color:var(--free);font-weight:600}
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:9px}
   .m{background:var(--card);border:1px solid var(--line);border-radius:12px;
     padding:11px 12px;display:flex;flex-direction:column;gap:5px}
   .m .n{font-size:13px;color:var(--muted);font-weight:600}
   .m .s{font-size:16px;font-weight:700;display:inline-flex;align-items:center;gap:6px}
-  .m .s::before{content:"";width:8px;height:8px;border-radius:50%;background:currentColor;
-    flex:none}
+  .m .s::before{content:"";width:8px;height:8px;border-radius:50%;background:currentColor;flex:none}
   .m .t{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums;min-height:18px}
   .free{background:var(--freebg);border-color:transparent} .free .s{color:var(--free)}
   .done{background:var(--donebg);border-color:transparent} .done .s{color:var(--done)}
   .busy .s{color:var(--busy)}
   .dead{background:var(--deadbg)} .dead .s{color:var(--dead)}
   .err{background:var(--errbg)} .err .s{color:var(--err)}
-  footer{margin-top:24px;font-size:11px;color:var(--muted);line-height:1.7}
+  footer{margin-top:26px;font-size:11px;color:var(--muted);line-height:1.7}
 </style>
 </head>
 <body>
@@ -56,14 +64,14 @@
 </header>
 <p id="summary">—</p>
 
-<h2>洗衣機</h2>
+<div class="head"><h2>洗衣機</h2><span class="soon" id="soon-w"></span></div>
 <div class="grid" id="washers"></div>
-<h2>烘衣機</h2>
+<div class="head"><h2>烘衣機</h2><span class="soon" id="soon-d"></span></div>
 <div class="grid" id="dryers"></div>
 
 <footer>
-  資料來自機台心跳（MQTT），約每 4 秒更新一次。<br>
-  「閒置」= 可直接使用；「完成」= 剛洗好，衣服可能還在裡面。
+  資料來自機台心跳，約每 4 秒更新一次，不用重新整理。<br>
+  「閒置」= 可直接使用；「剛洗好」= 已完成，衣服可能還在裡面。
 </footer>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.10.1/mqtt.min.js"></script>
@@ -79,7 +87,7 @@ const MACHINES = [
 const STATUS = {
   "-1":["失聯","dead"], 0:["閒置","free"], 1:["閒置","free"], 2:["等待付款","done"],
   4:["等待操作","done"], 5:["等待操作","done"], 8:["運轉中","busy"], 9:["鎖門中","busy"],
-  10:["開鎖中","busy"], 11:["暫停","busy"], 12:["完成","done"], 128:["錯誤","err"],
+  10:["開鎖中","busy"], 11:["暫停","busy"], 12:["剛洗好","done"], 128:["錯誤","err"],
 };
 
 const state = {};   // mac -> {main, timeLeft, ts}
@@ -95,6 +103,7 @@ for (const [mac, label, kind] of MACHINES) {
 
 // 心跳是 16-bit 混合碼，高位元組才是主狀態；watchdog 的 -1 不做位移
 const mainCode = (c) => (c < 0 ? c : (c >> 8) & 0xff);
+const mmss = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 
 function remaining(s) {
   if (s.main !== 8) return s.timeLeft;              // 只有運轉中會繼續倒數
@@ -102,22 +111,39 @@ function remaining(s) {
 }
 
 function render() {
-  let free = 0;
-  for (const [mac, label] of MACHINES) {
+  const tally = { w: { free: 0, done: 0, soon: null }, d: { free: 0, done: 0, soon: null } };
+
+  for (const [mac, label, kind] of MACHINES) {
     const s = state[mac], el = els[mac];
     if (!s) continue;
     const left = remaining(s);
-    // 運轉中但已歸零 → 視為完成（跟廠商前端一致）
+    // 運轉中但已歸零 → 視為剛洗好（跟廠商前端一致）
     const code = s.main === 8 && left < 1 ? 12 : s.main;
     const [text, cls] = STATUS[code] ?? ["未知", "dead"];
-    if (code === 0 || code === 1) free++;
+    const t = tally[kind];
+
+    if (code === 0 || code === 1) t.free++;
+    else if (code === 12) t.done++;
+    else if (code === 8 && (t.soon === null || left < t.soon)) t.soon = left;
+
     el.className = "m " + cls;
     el.querySelector(".s").textContent = text;
-    el.querySelector(".t").textContent =
-      code === 8 ? `剩 ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}` : "";
+    el.querySelector(".t").textContent = code === 8 ? `剩 ${mmss(left)}` : "";
   }
+
+  const free = tally.w.free + tally.d.free;
+  const done = tally.w.done + tally.d.done;
   document.getElementById("summary").innerHTML =
-    `<b>${free}</b> 台可直接使用`;
+    `<b>${free}</b> 台閒置` +
+    (done ? `<span class="sep">·</span><span class="warm">${done}</span> 台剛洗好` : "");
+
+  // 各區塊：有閒置就報台數，否則報最快多久有一台
+  for (const [kind, id] of [["w", "soon-w"], ["d", "soon-d"]]) {
+    const t = tally[kind], el = document.getElementById(id);
+    if (t.free > 0) { el.textContent = `${t.free} 台可用`; el.className = "soon ok"; }
+    else if (t.soon !== null) { el.textContent = `最快 ${mmss(t.soon)} 後`; el.className = "soon"; }
+    else { el.textContent = ""; el.className = "soon"; }
+  }
 }
 
 const conn = document.getElementById("conn");
