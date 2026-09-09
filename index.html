@@ -32,14 +32,20 @@
   h1{font-size:19px;margin:0;letter-spacing:.02em}
   #conn{font-size:12px;color:var(--muted);white-space:nowrap}
   #conn.bad{color:var(--err)}
-  #keepopen{display:none;font-size:12px;color:var(--bell);margin:12px 0 0}
-  #keepopen.show{display:block}
-  #tools{margin:12px 0 4px;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  #tools{margin:12px 0 4px}
   #tools button{font-size:12px;padding:4px 10px;border-radius:7px;cursor:pointer;
     border:1px solid var(--line);background:var(--card);color:var(--muted)}
   #tools button:hover{color:var(--text)}
-  #testmsg{font-size:12px;color:var(--muted)}
-  #testmsg.ok{color:var(--free)} #testmsg.bad{color:var(--err)}
+  /* 浮動提示：position:fixed 脫離版面流，出現與消失都不會推動任何內容 */
+  #toast{position:fixed;left:50%;transform:translateX(-50%);
+    bottom:calc(18px + env(safe-area-inset-bottom));width:max-content;
+    max-width:min(92vw,420px);background:var(--card);border:1px solid var(--line);
+    border-radius:10px;padding:10px 14px;font-size:13px;line-height:1.6;color:var(--text);
+    box-shadow:0 8px 28px rgba(0,0,0,.3);opacity:0;pointer-events:none;
+    transition:opacity .25s;z-index:20}
+  #toast.show{opacity:1}
+  #toast.ok{color:var(--free)}
+  #toast.bad{color:var(--err);border-color:var(--err)}
   .head{display:flex;align-items:baseline;justify-content:space-between;margin:20px 0 8px;gap:10px}
   .head h2{font-size:13px;color:var(--muted);font-weight:600;margin:0;letter-spacing:.08em}
   .head .soon{font-size:13px;font-variant-numeric:tabular-nums;color:var(--muted)}
@@ -68,13 +74,14 @@
   <h1>碩齋洗衣房</h1>
   <span id="conn">連線中…</span>
 </header>
-<p id="keepopen">分頁要留著才會通知，可以最小化或切到背景。</p>
-<p id="tools"><button id="test">測試通知</button><span id="testmsg"></span></p>
+<p id="tools"><button id="test">測試通知</button></p>
 
 <div class="head"><h2>洗衣機</h2><span class="soon" id="soon-w"></span></div>
 <div class="grid" id="washers"></div>
 <div class="head"><h2>烘衣機</h2><span class="soon" id="soon-d"></span></div>
 <div class="grid" id="dryers"></div>
+
+<div id="toast" role="status" aria-live="polite"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.10.1/mqtt.min.js"></script>
 <script>
@@ -178,20 +185,24 @@ function displayRemaining(mac, s) {
 // --- 鈴鐺：單純的開關，按一下盯著、再按一下取消，完成時通知一次 ---
 async function toggleBell(mac) {
   if (watches[mac]) { delete watches[mac]; save(); render(); return; }
-  if (!("Notification" in window)) { bellMsg("這個瀏覽器不支援通知"); return; }
+  if (!("Notification" in window)) { toast("這個瀏覽器不支援通知", "bad"); return; }
   if (Notification.permission === "default") await Notification.requestPermission();
   if (Notification.permission !== "granted") {
-    bellMsg("通知權限被關掉了，要到瀏覽器的網站設定裡重新開啟");
+    toast("通知權限被關掉了，要到瀏覽器的網站設定裡重新開啟", "bad");
     return;
   }
   watches[mac] = true;
   save(); render();
+  toast("分頁要留著才會通知，可以最小化或切到背景");
 }
-// 失敗訊息直接寫在測試按鈕旁邊，不另外開對話框
-function bellMsg(msg) {
-  const el = document.getElementById("testmsg");
-  el.className = "bad";
-  el.textContent = "✕ " + msg;
+// 浮動提示：3 秒後自動消失，期間不佔版面空間
+let toastTimer = null;
+function toast(msg, kind) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.className = "show" + (kind ? " " + kind : "");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.className = ""; }, 3000);
 }
 
 function render() {
@@ -225,9 +236,6 @@ function render() {
       code === 8 ? (left > 0 ? "剩 " + mmss(left) : "即將完成") : "";
     el.querySelector(".bell").classList.toggle("on", !!watches[mac]);
   }
-
-  document.getElementById("keepopen").classList
-    .toggle("show", Object.keys(watches).length > 0);
 
   // 各區塊：有閒置就報台數，否則報最快多久有一台
   for (const pair of [["w", "soon-w"], ["d", "soon-d"]]) {
@@ -267,14 +275,12 @@ client.on("message", (topic, payload) => {
 
 // 測試按鈕：把「邏輯有沒有跑」和「系統有沒有顯示」分開，失敗時直接把原因寫在畫面上
 document.getElementById("test").addEventListener("click", async () => {
-  const msg = document.getElementById("testmsg");
-  msg.className = ""; msg.textContent = "送出中…";
   if ("Notification" in window && Notification.permission === "default") {
     await Notification.requestPermission();
   }
   const err = await notify("測試通知：看得到這則就表示通知正常");
-  if (err) { msg.className = "bad"; msg.textContent = "✕ " + err; }
-  else { msg.className = "ok"; msg.textContent = "✓ 已送出。沒跳出來就是被系統擋掉了（Windows 專注輔助、或 Chrome 的網站通知設定）"; }
+  if (err) toast(err, "bad");
+  else toast("已送出。沒跳出來就是被系統擋掉了", "ok");
 });
 
 // 每 250 毫秒重畫一次。倒數本身是「鎖定的完成時刻減現在」，秒數的整數邊界落在哪個
