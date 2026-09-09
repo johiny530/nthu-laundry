@@ -189,6 +189,21 @@ function remaining(s) {
   return Math.max(0, Math.floor(s.timeLeft - (Date.now() / 1000 - s.ts)));
 }
 
+// 顯示用的剩餘秒數。心跳每 3 秒一次，中間靠外推補足才會平順，但外推值和新心跳互相
+// 拉扯會讓數字忽快忽退（烘1 曾持續回報 timeLeft=1，外推值就在 0 附近來回穿越）。
+// 同一輪運轉只允許往下走；狀態改變、或 timeLeft 明顯變大（代表換了新的一輪）才重設。
+const shown = {};
+function displayRemaining(mac, s) {
+  const raw = remaining(s);
+  const cur = shown[mac];
+  if (!cur || cur.main !== s.main || raw > cur.sec + 5) {
+    shown[mac] = { main: s.main, sec: raw };
+    return raw;
+  }
+  if (raw < cur.sec) cur.sec = raw;
+  return cur.sec;
+}
+
 // --- 鈴鐺 ---
 let asking = null;
 const ask = document.getElementById("ask");
@@ -237,9 +252,10 @@ function render() {
   for (const [mac, label, kind] of MACHINES) {
     const s = state[mac], el = els[mac];
     if (!s) continue;
-    const left = remaining(s);
-    // 運轉中但已歸零 → 視為剛洗好（跟廠商前端一致）
-    const code = s.main === 8 && left < 1 ? 12 : s.main;
+    // 完成與否一律以機器回報的主狀態為準。過去這裡用「外推歸零就當作完成」，
+    // 結果機器持續回報 timeLeft=1 時，狀態會每秒在運轉中／剛洗好之間跳，還會發出假通知。
+    const code = s.main;
+    const left = displayRemaining(mac, s);
     const st = STATUS[code] || ["未知", "dead"];
     const t = tally[kind];
 
@@ -261,7 +277,8 @@ function render() {
 
     el.className = "m " + st[1];
     el.querySelector(".s").textContent = st[0];
-    el.querySelector(".t").textContent = code === 8 ? "剩 " + mmss(left) : "";
+    el.querySelector(".t").textContent =
+      code === 8 ? (left > 0 ? "剩 " + mmss(left) : "即將完成") : "";
     el.querySelector(".bell").classList.toggle("on", !!watches[mac]);
     el.querySelector(".lead").textContent =
       watches[mac] && watches[mac].lead > 0 ? "提前 " + watches[mac].lead + " 分" : "";
