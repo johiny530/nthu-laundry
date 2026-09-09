@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>碩齋洗衣房</title>
+<meta name="theme-color" content="#0f1115">
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#fff; --text:#14161a; --muted:#6b7280; --line:#e5e7eb;
+    --free:#15803d; --freebg:#dcfce7; --done:#a16207; --donebg:#fef3c7;
+    --busy:#1d4ed8; --busybg:#dbeafe; --dead:#6b7280; --deadbg:#f1f3f5;
+    --err:#b91c1c; --errbg:#fee2e2;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0f1115; --card:#181b21; --text:#e8eaed; --muted:#9aa1ab; --line:#272b33;
+      --free:#4ade80; --freebg:#14311f; --done:#fbbf24; --donebg:#3a2e0c;
+      --busy:#7aa7ff; --busybg:#16233d; --dead:#8b929c; --deadbg:#20242b;
+      --err:#fca5a5; --errbg:#3a1717;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC",sans-serif;
+    padding:16px 14px calc(24px + env(safe-area-inset-bottom));max-width:640px;margin-inline:auto}
+  header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:4px}
+  h1{font-size:19px;margin:0;letter-spacing:.02em}
+  #conn{font-size:12px;color:var(--muted);white-space:nowrap}
+  #conn.bad{color:var(--err)}
+  #summary{font-size:14px;color:var(--muted);margin:0 0 18px}
+  #summary b{color:var(--free);font-size:26px;font-variant-numeric:tabular-nums;
+    vertical-align:-2px;margin-right:2px}
+  h2{font-size:13px;color:var(--muted);font-weight:600;margin:20px 0 8px;
+    letter-spacing:.08em}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:9px}
+  .m{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:11px 12px;display:flex;flex-direction:column;gap:5px}
+  .m .n{font-size:13px;color:var(--muted);font-weight:600}
+  .m .s{font-size:16px;font-weight:700;display:inline-flex;align-items:center;gap:6px}
+  .m .s::before{content:"";width:8px;height:8px;border-radius:50%;background:currentColor;
+    flex:none}
+  .m .t{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums;min-height:18px}
+  .free{background:var(--freebg);border-color:transparent} .free .s{color:var(--free)}
+  .done{background:var(--donebg);border-color:transparent} .done .s{color:var(--done)}
+  .busy .s{color:var(--busy)}
+  .dead{background:var(--deadbg)} .dead .s{color:var(--dead)}
+  .err{background:var(--errbg)} .err .s{color:var(--err)}
+  footer{margin-top:24px;font-size:11px;color:var(--muted);line-height:1.7}
+</style>
+</head>
+<body>
+<header>
+  <h1>碩齋洗衣房</h1>
+  <span id="conn">連線中…</span>
+</header>
+<p id="summary">—</p>
+
+<h2>洗衣機</h2>
+<div class="grid" id="washers"></div>
+<h2>烘衣機</h2>
+<div class="grid" id="dryers"></div>
+
+<footer>
+  資料來自機台心跳（MQTT），約每 4 秒更新一次。<br>
+  「閒置」= 可直接使用；「完成」= 剛洗好，衣服可能還在裡面。
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.10.1/mqtt.min.js"></script>
+<script>
+const MACHINES = [
+  ["94c96001b3d9","洗 1","w"], ["94c96001b3ef","洗 2","w"], ["94c96001b3ee","洗 3","w"],
+  ["94c96001b3ff","洗 4","w"], ["94c96001b3d8","洗 5","w"], ["94c96001b3dc","洗 6","w"],
+  ["94c96001b3af","烘 1","d"], ["94c96001b399","烘 2","d"],
+  ["94c96001b398","烘 3","d"], ["94c96001b3aa","烘 4","d"],
+];
+
+// 主狀態碼 → 顯示文字與外觀，取自廠商頁面的狀態表
+const STATUS = {
+  "-1":["失聯","dead"], 0:["閒置","free"], 1:["閒置","free"], 2:["等待付款","done"],
+  4:["等待操作","done"], 5:["等待操作","done"], 8:["運轉中","busy"], 9:["鎖門中","busy"],
+  10:["開鎖中","busy"], 11:["暫停","busy"], 12:["完成","done"], 128:["錯誤","err"],
+};
+
+const state = {};   // mac -> {main, timeLeft, ts}
+const els = {};
+
+for (const [mac, label, kind] of MACHINES) {
+  const el = document.createElement("div");
+  el.className = "m dead";
+  el.innerHTML = `<span class="n">${label}</span><span class="s">—</span><span class="t"></span>`;
+  document.getElementById(kind === "w" ? "washers" : "dryers").append(el);
+  els[mac] = el;
+}
+
+// 心跳是 16-bit 混合碼，高位元組才是主狀態；watchdog 的 -1 不做位移
+const mainCode = (c) => (c < 0 ? c : (c >> 8) & 0xff);
+
+function remaining(s) {
+  if (s.main !== 8) return s.timeLeft;              // 只有運轉中會繼續倒數
+  return Math.max(0, Math.floor(s.timeLeft - (Date.now() / 1000 - s.ts)));
+}
+
+function render() {
+  let free = 0;
+  for (const [mac, label] of MACHINES) {
+    const s = state[mac], el = els[mac];
+    if (!s) continue;
+    const left = remaining(s);
+    // 運轉中但已歸零 → 視為完成（跟廠商前端一致）
+    const code = s.main === 8 && left < 1 ? 12 : s.main;
+    const [text, cls] = STATUS[code] ?? ["未知", "dead"];
+    if (code === 0 || code === 1) free++;
+    el.className = "m " + cls;
+    el.querySelector(".s").textContent = text;
+    el.querySelector(".t").textContent =
+      code === 8 ? `剩 ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}` : "";
+  }
+  document.getElementById("summary").innerHTML =
+    `<b>${free}</b> 台可直接使用`;
+}
+
+const conn = document.getElementById("conn");
+const client = mqtt.connect("wss://wipepay.com.tw:443/mqtt/");
+
+client.on("connect", () => {
+  conn.textContent = "已連線";
+  conn.className = "";
+  for (const [mac] of MACHINES) client.subscribe(`machine/${mac}/status/#`);
+  // retained 訊息應立即到達；沒到的當作失聯
+  setTimeout(() => {
+    for (const [mac] of MACHINES) if (!state[mac]) state[mac] = { main: -1, timeLeft: 0, ts: 0 };
+    render();
+  }, 5000);
+});
+client.on("reconnect", () => { conn.textContent = "重新連線中…"; conn.className = "bad"; });
+client.on("close", () => { conn.textContent = "已斷線"; conn.className = "bad"; });
+
+client.on("message", (topic, payload) => {
+  const mac = topic.split("/")[1];
+  let d; try { d = JSON.parse(payload.toString()); } catch { return; }
+  if (d.type !== "status" || !els[mac]) return;
+  const prev = state[mac];
+  if (prev && d.ts < prev.ts) return;               // 忽略較舊的亂序訊息
+  state[mac] = { main: mainCode(d.status), timeLeft: d.timeLeft ?? 0, ts: d.ts };
+  render();
+});
+
+setInterval(render, 1000);
+</script>
+</body>
+</html>
